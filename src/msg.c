@@ -164,13 +164,13 @@ static int do_mroute4(struct ipc_msg *msg)
 
 		if (!IN_MULTICAST(ntohl(src.s_addr))) {
 			len = is_range(msg->argv[pos]);
-			if (inet_pton(AF_INET, msg->argv[pos++], &grp) <= 0 || !IN_MULTICAST(ntohl(grp.s_addr))) {
-				smclog(LOG_DEBUG, "Invalid IPv4 group address");
+			if (len && (len < 0 || len > 32)) {
+				smclog(LOG_DEBUG, "Invalid prefix length (/LEN), must be 0-32");
 				return 1;
 			}
 
-			if (len && (len < 0 || len > 32)) {
-				smclog(LOG_DEBUG, "Invalid prefix length (/LEN), must be 0-32");
+			if (inet_pton(AF_INET, msg->argv[pos++], &grp) <= 0 || !IN_MULTICAST(ntohl(grp.s_addr))) {
+				smclog(LOG_DEBUG, "Invalid IPv4 group address");
 				return 1;
 			}
 		} else {
@@ -252,25 +252,44 @@ static int do_mroute6(struct ipc_msg *msg)
 		struct mroute6 mroute = { 0 };
 		struct ifmatch state_out;
 		char *ifname_in;
-		int pos = 0, mif;
+		int len, src_len, pos = 0, mif;
 
 		ifname_in = msg->argv[pos++];
 		mif = iface_match_mif_by_name(ifname_in, &state_in, NULL);
 		if (mif < 0)
 			break;
 
+		src_len = is_range(msg->argv[pos]);
+		if (src_len && (src_len < 0 || src_len > 128)) {
+			smclog(LOG_DEBUG, "Invalid IPv6 source address prefix length (/LEN), must be 0-128");
+			return 1;
+		}
+
 		if (inet_pton(AF_INET6, msg->argv[pos++], &mroute.source.sin6_addr) <= 0) {
 			smclog(LOG_DEBUG, "Invalid IPv6 source address");
 			return 1;
 		}
 
-		if (inet_pton(AF_INET6, msg->argv[pos++], &mroute.group.sin6_addr) <= 0 ||
-		    !IN6_IS_ADDR_MULTICAST(&mroute.group.sin6_addr)) {
-			smclog(LOG_DEBUG, "Invalid IPv6 group address");
+		if (!IN6_IS_ADDR_MULTICAST(&mroute.source.sin6_addr)) {
+			len = is_range(msg->argv[pos]);
+			if (len && (len < 0 || len > 128)) {
+				smclog(LOG_DEBUG, "Invalid IPv6 group address prefix length (/LEN), must be 0-128");
+				return 1;
+			}
+
+			if (inet_pton(AF_INET6, msg->argv[pos++], &mroute.group.sin6_addr) <= 0 ||
+			    !IN6_IS_ADDR_MULTICAST(&mroute.group.sin6_addr)) {
+				smclog(LOG_DEBUG, "Invalid IPv6 group address");
+				return 1;
+			}
+		} else {
+			smclog(LOG_DEBUG, "IPv6 source address is a multicast address.");
 			return 1;
 		}
 
 		mroute.inbound = mif;
+		mroute.src_len = src_len;
+		mroute.len     = len;
 
 		/*
 		 * Scan output interfaces for the 'add' command only, just ignore it
